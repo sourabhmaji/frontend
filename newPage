@@ -1,0 +1,648 @@
+/* eslint-disable */
+import { Octokit } from '@octokit/rest';
+import Select from 'react-select';
+import COUNTRIES from '../constants/countries.json';
+import CreatableSelect from 'react-select/creatable';
+import { Toast } from "@paypalcorp/pp-react-toast";
+import ReactDOM from "react-dom";
+import paypalLogo from '../assets/logo.png';
+import clsx from 'clsx';
+
+import {
+  Button,
+  Checkbox,
+  DropdownMenu,
+  HeadingText,
+  Row,
+  SingleSelectionGroup,
+  Switch,
+  TextInput,
+} from '@paypalcorp/pp-react';
+import { Buffer } from 'buffer';
+import Cookies from 'js-cookie';
+import React, { useEffect, useState } from 'react';
+import { GH_ACCESS_TOKEN_COOKIE_KEY } from '../constants/config';
+import { useAuth } from '../contexts/authContext';
+import { removeDuplicates } from 'src/utils/objects';
+import { CountryOption } from '../types/countries';
+import { countriesStringToCountryOptions } from '../utils/text';
+
+enum CapabilityDecision {
+  ENABLED = 'ENABLED',
+  DISABLED = 'DISABLED',
+  IN_REVIEW = 'IN_REVIEW',
+}
+
+
+type BrandedFeatureType = "BRANDED" | "UNBRANDED";
+
+type FullFeatureRepresentation = {
+  name: string;
+  type: BrandedFeatureType;
+  countries: CountryOption[];
+};
+
+const FTHelper = () => {
+  const auth = useAuth();
+
+
+  const coolOffPeriodDecisions = [
+    "DECLINED",
+    "NEED_MORE_DATA",
+    "IN_REVIEW",
+    "PENDING",
+    "ENABLED",
+    "NOT_APPLICABLE"
+  ];
+
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [featureNames, setFeatureNames] = useState('');
+  const [nameList, setNameList] = useState([]);
+
+  // Handle the "Add" button click
+  const addName = () => {
+    if (featureNames.trim() !== "" && !nameList.includes(featureNames)) {
+      setNameList([...nameList, featureNames]);
+      setFeatureNames(""); // Clear the input after adding
+    }
+  };
+
+  // Handle removing a name from the list
+  const removeName = (name) => {
+    setNameList(nameList.filter((item) => item !== name));
+  };
+
+  // Handle the Enter key to add name
+  const handleKeyPress = (e) => {
+    if (e.key === "Enter") {
+      addName();
+    }
+  };
+
+  const [coolOff, setCoolOff] = useState('');
+  const [coolOffDays, setCoolOffDays] = useState(0);
+  const [coolOffPolicies, setCoolOffPolicies] = useState<
+    { policy: string; days: number }[]
+  >([]);
+
+  const [checked, setChecked] = useState(false);
+  const [selectedCountries, setSelectedCountries] = useState<CountryOption[]>([]);
+  const [selectedDecisions, setSelectedDecisions] = useState<string[]>([]);
+
+  const [selectedDecision, setSelectedDecision] = useState<CapabilityDecision>(
+    CapabilityDecision.ENABLED,
+  );
+
+  const [entries, setEntries] = useState<{
+    countries: CountryOption[];
+    decision: string;
+  }[]>([]);
+
+  const [error, setError] = useState<string>('');
+
+
+
+  const handleAddCoolOffPolicy = () => {
+    if (!coolOff || !coolOff.value || !coolOffDays) return;
+
+    const exists = coolOffPolicies.some((p) => p.policy === coolOff);
+    if (exists) {
+      alert('This policy has already been added.');
+      return;
+    }
+
+    setCoolOffPolicies((prev) => [
+      ...prev,
+      { policy: coolOff.value, days: coolOffDays },
+    ]);
+
+    setCoolOff(null);
+    setCoolOffDays(0);
+  };
+
+  const handleDeletePolicy = (index: number) => {
+    setCoolOffPolicies((prev) => prev.filter((_, i) => i !== index));
+  };
+
+
+
+  const toggleDecisionCheckbox = (decision: string) => {
+    setSelectedDecisions((prev) =>
+      prev.includes(decision)
+        ? prev.filter((d) => d !== decision)
+        : [...prev, decision]
+    );
+  };
+
+
+
+
+
+  const hasDuplicateCountry = (): string | null => {
+    const selected = selectedCountries.map((c) => c.value);
+    for (const entry of entries) {
+      for (const country of entry.countries) {
+        if (selected.includes(country.value)) {
+          return country.label;
+        }
+      }
+    }
+    return null;
+  };
+
+  const isDuplicate = () => {
+    return entries.some(
+      (entry) =>
+        entry.decision === selectedDecision &&
+        entry.countries.length === selectedCountries.length &&
+        entry.countries.every((c, i) => c.value === selectedCountries[i].value)
+    );
+  };
+
+  const handleAddCountry = () => {
+    const duplicateCountry = hasDuplicateCountry();
+    if (duplicateCountry) {
+      setError(`Duplicate country '${duplicateCountry}' has already been added.`);
+      return;
+    }
+
+    if (selectedCountries.length && selectedDecision && !isDuplicate()) {
+      setEntries([
+        ...entries,
+        {
+          countries: selectedCountries,
+          decision: selectedDecision,
+        },
+      ]);
+      setSelectedCountries([]);
+      setSelectedDecision(CapabilityDecision.ENABLED);
+    }
+  };
+
+  const handleDelete = (indexToDelete: number) => {
+    setEntries(entries.filter((_, i) => i !== indexToDelete));
+  };
+
+  const [globalDecision, setGlobalDecision] = useState(null);
+
+
+
+  const customMultiValue = ({ index, data, selectProps }: any) => {
+    const totalSelected = selectProps.value.length;
+    const showCount = 3;
+
+    if (index < showCount) {
+      return (
+        <div className="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full mr-1 mb-1">
+          {data.value}
+        </div>
+      );
+    } else if (index === showCount) {
+      return (
+        <div className="inline-block bg-gray-200 text-gray-600 text-xs px-2 py-1 rounded-full mr-1 mb-1">
+          +{totalSelected - showCount} more
+        </div>
+      );
+    }
+    return null;
+  };
+
+
+
+  const [featureNameToAdd, setFeatureNameToAdd] = useState("");
+  const [selectedFeatureCategory, setSelectedFeatureCategory] =
+    useState<BrandedFeatureType | null>(null);
+  const [countryListForCurrentFeature, setCountryListForCurrentFeature] = useState<CountryOption[]>([]);
+  const [featureBlocksToRender, setFeatureBlocksToRender] = useState<FullFeatureRepresentation[]>([]);
+
+  const handleAddFeatureIntoStateArray = () => {
+    if (
+      featureNameToAdd.trim() === "" ||
+      !selectedFeatureCategory ||
+      countryListForCurrentFeature.length === 0
+    ) {
+      return;
+    }
+
+    const newFeature: FullFeatureRepresentation = {
+      name: featureNameToAdd,
+      type: selectedFeatureCategory,
+      countries: countryListForCurrentFeature,
+    };
+
+    setFeatureBlocksToRender([...featureBlocksToRender, newFeature]);
+    setFeatureNameToAdd("");
+    setSelectedFeatureCategory(null);
+    setCountryListForCurrentFeature([]);
+  };
+
+  const handleFeatureBlockRemoval = (index: number) => {
+    const updated = [...featureBlocksToRender];
+    updated.splice(index, 1);
+    setFeatureBlocksToRender(updated);
+  };
+
+  const pulseWhenSelected = (isSelected: boolean) =>
+    isSelected
+      ? "ring-2 ring-blue-500 animate-pulse-once"
+      : "hover:ring-2 hover:ring-blue-300";
+
+  return (
+    <div className="min-h-screen bg-[#f5f5f7] text-gray-800">
+      {/* Header with PayPal logo */}
+      <header className="flex items-center justify-between px-6 py-5 border-b border-gray-300 bg-white shadow-sm">
+        <div className="flex items-center space-x-4">
+          <img src={paypalLogo} alt="PayPal" className="h-7 w-auto" />
+          <span className="text-gray-900 font-semibold text-lg tracking-tight">Risk Onboarding Tool</span>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto mt-12 px-4 sm:px-6 lg:px-8">
+        <div className="bg-white rounded-2xl shadow-md p-10 border border-gray-200 transition-shadow hover:shadow-lg duration-300 ease-in-out">
+
+          {/* Section Header */}
+          <div className="text-center mb-8">
+            <h2 className="text-2xl font-semibold text-gray-900">Add New Feature</h2>
+            <p className="text-gray-500 text-sm mt-2">Create a new feature and apply configuration settings</p>
+          </div>
+
+
+
+          <>
+
+            <div className="space-y-6">
+              {/* Compartment: Feature Input */}
+              <div className="p-6 border border-gray-300 rounded-xl shadow-sm bg-white space-y-4">
+                <h2 className="text-lg font-semibold text-gray-800">Add Feature</h2>
+
+                <input
+                  type="text"
+                  value={featureNameToAdd}
+                  onChange={(e) => setFeatureNameToAdd(e.target.value)}
+                  placeholder="Enter feature name..."
+                  className="bg-transparent border-b border-gray-400 text-gray-800 placeholder-gray-500 focus:border-blue-600 focus:ring-2 focus:ring-blue-600 focus:outline-none py-2 px-3 w-full transition-all duration-300"
+                />
+
+            {/* Branded / Unbranded Toggle */}
+<div className="flex gap-4 mt-2">
+  {(["BRANDED", "UNBRANDED"] as BrandedFeatureType[]).map((option) => (
+    <button
+      key={option}
+      onClick={() => setSelectedFeatureCategory(option)}
+      className={`px-4 py-2 rounded-lg font-medium transition border border-gray-300 shadow-sm
+        ${
+          selectedFeatureCategory === option
+            ? "bg-blue-600 text-white animate-[pulse_1.5s_ease-in-out_1]"
+            : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+        }`}
+    >
+      {option}
+    </button>
+  ))}
+</div>
+
+
+                {/* Country Selector */}
+                <div className="mt-4">
+                  <label className="block text-sm font-medium mb-1 text-gray-700">
+                    Select Countries
+                  </label>
+                  <Select
+                    isMulti
+                    closeMenuOnSelect={false}
+                    placeholder="Select countries"
+                    value={countryListForCurrentFeature}
+                    options={COUNTRIES.map((country): CountryOption => ({
+                      label: `${country.alpha2code} - ${country.country}`,
+                      value: country.alpha2code,
+                      alpha2code: country.alpha2code,
+                    }))}
+                    onChange={(updatedCountries) =>
+                      setCountryListForCurrentFeature(updatedCountries as CountryOption[])
+                    }
+                    className="w-full text-sm"
+                    styles={{
+                      control: (base) => ({
+                        ...base,
+                        minHeight: "44px",
+                        borderRadius: "0.75rem",
+                      }),
+                      menu: (base) => ({
+                        ...base,
+                        zIndex: 50,
+                      }),
+                    }}
+                  />
+                </div>
+
+                {/* Add Feature Button */}
+                <div className="text-right mt-4">
+                  <button
+                    onClick={handleAddFeatureIntoStateArray}
+                    className="bg-blue-600 text-white px-6 py-2 rounded-xl font-semibold hover:bg-blue-700 transition transform hover:scale-105"
+                  >
+                    Add Feature
+                  </button>
+                </div>
+              </div>
+
+              {/* Preview Compartment of Added Features */}
+              {featureBlocksToRender.length > 0 && (
+                <div className="space-y-4">
+                  {featureBlocksToRender.map((feature, index) => (
+                    <div
+                      key={index}
+                      className="relative bg-gray-50 border border-gray-200 rounded-xl p-4 flex flex-col gap-2 shadow-sm"
+                    >
+                      <button
+                        onClick={() => handleFeatureBlockRemoval(index)}
+                        className="absolute top-2 right-2 text-sm text-red-500 hover:text-red-700 transition"
+                        aria-label="Remove feature"
+                      >
+                        ❌
+                      </button>
+                      <div className="text-md font-semibold text-gray-800">
+                        {feature.name}
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        Type: {feature.type}
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {feature.countries.map((country) => (
+                          <span
+                            key={country.value}
+                            className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full"
+                          >
+                            {country.label}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+
+
+
+
+
+
+
+
+
+
+
+          {/* Decisions Selection */}
+          <section className="mb-6">
+            <h2 className="text-lg font-semibold text-gray-800 mb-3">Select Decisions</h2>
+            <div className="flex flex-wrap gap-3">
+              {coolOffPeriodDecisions.map((decision) => {
+                const isSelected = selectedDecisions.includes(decision);
+                return (
+                  <button
+                    key={decision}
+                    onClick={() => toggleDecisionCheckbox(decision)}
+                    className={clsx(
+                      "px-4 py-2 rounded-full text-sm font-medium border transition-all duration-200 transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/40",
+                      "hover:shadow-md active:scale-[0.98]",
+                      isSelected
+                        ? "bg-blue-600 text-white border-blue-600 hover:bg-blue-700"
+                        : "bg-transparent text-gray-700 border-gray-300 hover:bg-gray-100"
+                    )}
+                  >
+                    {decision.replace(/_/g, " ")}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+
+
+          {/* Global Switch */}
+          <div className="flex flex-col items-center justify-center pt-4 border-t border-gray-200 space-y-4">
+            <div className="flex items-center space-x-2">
+              <Switch
+                checked={checked}
+                onChange={() => {
+                  setChecked((prev) => !prev);
+                  setGlobalDecision(null); // Reset when toggled off
+                }}
+                label="Apply to all countries"
+              />
+            </div>
+
+            {/* Dropdown shown only when switch is ON */}
+            {checked && (
+              <div className="w-full max-w-xs">
+                <Select
+                  placeholder="Select default decision"
+                  value={globalDecision}
+                  options={selectedDecisions.map((item) => ({
+                    label: item,
+                    value: item,
+                  }))}
+                  onChange={(item) => setGlobalDecision(item)}
+                />
+              </div>
+            )}
+          </div>
+
+          {!checked && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                {/* Country Select */}
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium mb-1">Select Countries</label>
+                  <Select
+                    isMulti
+                    placeholder="Choose countries"
+                    value={selectedCountries}
+                    options={COUNTRIES.map((country): CountryOption => ({
+                      label: `${country.alpha2code} - ${country.country}`,
+                      value: country.alpha2code,
+                      alpha2code: country.alpha2code,
+                    }))}
+                    onChange={(updatedCountries: CountryOption[]) => {
+                      setSelectedCountries(updatedCountries);
+                    }}
+                    className="w-full"
+                  />
+                </div>
+
+                {/* Decision Select Dropdown (Filtered to only checked ones) */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">Decision</label>
+                  <CreatableSelect
+                    placeholder="Select decision"
+                    onChange={(newSelectedDecision) =>
+                      setSelectedDecision(newSelectedDecision?.value ?? null)
+                    }
+                    value={
+                      selectedDecision
+                        ? { value: selectedDecision, label: selectedDecision }
+                        : null
+                    }
+                    options={selectedDecisions.map((decision) => ({
+                      value: decision,
+                      label: decision,
+                    }))}
+                    styles={{
+                      container: (baseStyles) => ({
+                        ...baseStyles,
+                        width: '100%',
+                      }),
+                    }}
+                    isClearable
+                    isDisabled={selectedDecisions.length === 0}
+                    noOptionsMessage={() =>
+                      selectedDecisions.length === 0
+                        ? 'Select decisions using checkboxes first'
+                        : 'No matching option'
+                    }
+                  />
+                </div>
+
+
+                {/* Add Button */}
+                <div>
+                  <button
+                    onClick={handleAddCountry}
+                    className="w-full bg-blue-600 text-white px-4 py-2.5 rounded-lg shadow hover:bg-blue-700 transition duration-200"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              {/* Display Added Entries */}
+              <div className="space-y-3">
+                {entries.map((entry, index) => (
+                  <div
+                    key={index}
+                    className="flex flex-col md:flex-row justify-between items-start md:items-center border rounded-lg bg-gray-50 p-4 shadow-sm gap-2"
+                  >
+                    <div>
+                      <div className="flex flex-wrap gap-2 mb-1">
+                        {entry.countries.map((c, idx) => (
+                          <span
+                            key={idx}
+                            className="inline-block bg-blue-100 text-blue-700 text-xs font-medium px-2 py-1 rounded-full"
+                          >
+                            {c.label}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="text-sm text-gray-700">
+                        <span className="font-medium">Decision:</span> {entry.decision}
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => handleDelete(index)}
+                      className="text-red-500 hover:text-red-700 transition duration-150 text-sm font-medium"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+
+
+          <>
+            {/* Step 2: Add Cool-Off Policy Row */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
+              <div>
+                <Select
+                  placeholder="Select CoolOff"
+                  value={coolOff}
+                  options={selectedDecisions.map((item) => ({
+                    label: item,
+                    value: item,
+                  }))}
+                  onChange={(item) => setCoolOff(item)}
+                />
+              </div>
+
+              <div className="col-span-2">
+                <TextInput
+                  name="value"
+                  type="number"
+                  placeholder="Cool-off days"
+                  value={coolOffDays}
+                  onChange={(e) => setCoolOffDays(e.target.value)}
+                  className="bg-gray-100 rounded-lg shadow-sm p-4 w-full"
+                />
+              </div>
+
+              <Button
+                onClick={handleAddCoolOffPolicy}
+                className={clsx(
+                  'text-white font-medium py-2.5 rounded-lg shadow transition duration-200',
+                  coolOff && coolOffDays
+                    ? 'bg-blue-600 hover:bg-blue-700'
+                    : 'bg-gray-300 cursor-not-allowed'
+                )}
+                disabled={!coolOff || !coolOffDays}
+              >
+                Add
+              </Button>
+            </div>
+
+            {/* Step 3: Display Policies */}
+            {coolOffPolicies.length > 0 && (
+              <div className="mt-6 space-y-3">
+                {coolOffPolicies.map((item, index) => {
+                  const isUnavailable = !selectedDecisions.includes(item.policy);
+                  return (
+                    <div
+                      key={index}
+                      className="flex justify-between items-center border rounded-lg p-4 bg-gray-50 shadow-sm"
+                    >
+                      <div>
+                        <div className="font-semibold text-sm flex items-center gap-2">
+                          Policy: {item.policy}
+                          {isUnavailable && (
+                            <span className="text-xs text-yellow-500 italic">
+                              (unavailable)
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm text-gray-700">Days: {item.days}</div>
+                      </div>
+                      <button
+                        onClick={() => handleDeletePolicy(index)}
+                        className="text-red-500 hover:text-red-700 font-medium"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+
+
+          <Button
+            onClick={() => {
+              console.log(selectedCountries, checked, coolOff);
+            }}
+            className={clsx(
+              'mt-4 w-full text-white font-bold py-2 rounded shadow transition-transform duration-300',
+              isUpdating ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 hover:scale-[1.02]'
+            )}
+          >
+            Submit
+          </Button>
+        </div>
+      </main>
+    </div>
+  );
+};
+export default FTHelper;
